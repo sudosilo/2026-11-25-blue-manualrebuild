@@ -139,6 +139,21 @@ h3{margin:14px 0 6px;font-size:15px;color:var(--blue)}
 #lightbox{position:fixed;inset:0;z-index:40;background:rgba(15,20,30,.94);display:none;align-items:center;justify-content:center}
 #lightbox.open{display:flex}
 #lightbox img{max-width:100%;max-height:100%;object-fit:contain}
+#libList button{width:100%;margin:3px 0;text-align:left;height:auto;min-height:40px;padding:6px 10px}
+#libList button.cur{border-left:6px solid var(--blue);font-weight:700;color:var(--blue)}
+#libList small{display:block;font-weight:400;color:#506078;font-size:12px}
+#combine{position:fixed;inset:0;z-index:29;background:var(--bg);display:none}
+#combine.open{display:block}
+#cbHead{position:absolute;top:0;left:0;right:0;height:56px;background:#fff;border-bottom:3px solid var(--blue)}
+#cbHead .cbt{flex:1;font-weight:700;color:var(--blue)}
+#cbBody{position:absolute;top:56px;left:0;right:0;bottom:0;overflow:auto;padding:10px}
+#cbBody select{width:100%;height:42px;border:1px solid var(--line);border-radius:8px;background:#fff;padding:0 8px;font:inherit}
+.cbg{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin:6px 0}
+.cap{color:#506078;font-size:13px}
+#cbGrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(105px,1fr));gap:8px;margin-top:8px}
+#cbGrid .ct{background:#fff;border:2px solid var(--line);border-radius:10px;padding:4px;text-align:center;font-size:12px;color:#506078}
+#cbGrid .ct.on{border-color:var(--blue);background:var(--blue2);color:var(--blue);font-weight:700}
+#cbGrid img{width:100%;height:110px;object-fit:contain;background:#eef2f7;border-radius:6px;display:block}
 </style>
 </head>
 <body>
@@ -180,14 +195,24 @@ h3{margin:14px 0 6px;font-size:15px;color:var(--blue)}
 <div id="menu">
   <div id="menuHead"><span>Manual Rebuild</span><button id="closeMenu">&#10005;</button></div>
   <details open>
-    <summary>Project</summary>
-    <label>Manual title</label>
+    <summary>Library</summary>
+    <div id="libList"></div>
+    <div class="grid">
+      <button class="full primary" id="libNew">Start a new book</button>
+      <button class="full" id="libCombine">Combine books</button>
+      <button id="libSave">Save book file</button>
+      <button id="libLoad">Load book file</button>
+      <button class="full" id="libDel">Delete this book</button>
+    </div>
+  </details>
+  <details>
+    <summary>This book</summary>
+    <label>Book title</label>
     <input id="titleIn" placeholder="Manual title">
     <div class="grid">
       <button class="full primary" id="add">Add photos</button>
       <button id="sortName">Sort by file name</button>
       <button id="sortTime">Sort by photo time</button>
-      <button class="full" id="clearAll">Start a new project</button>
     </div>
   </details>
   <details>
@@ -287,6 +312,22 @@ h3{margin:14px 0 6px;font-size:15px;color:var(--blue)}
 </div>
 
 <input type="file" id="file" accept="image/*" multiple hidden>
+<input type="file" id="libFile" accept=".json,application/json" hidden>
+<div id="combine">
+  <div id="cbHead">
+    <div class="row"><button id="cbBack">Back</button><div class="cbt">Combine books</div></div>
+  </div>
+  <div id="cbBody">
+    <h3>Make a new book from two books</h3>
+    <div class="cbg"><select id="cbA"></select><select id="cbB"></select></div>
+    <div class="cbg"><button class="primary" id="cbAlt">Alternate pages</button><button id="cbSeq">First book, then second</button></div>
+    <div class="cap">Alternate pages lays them page by page, one from each book, so you can line up matching sections. The source books stay as they are.</div>
+    <h3>Pull pages into the book you have open</h3>
+    <select id="cbSrc"></select>
+    <div class="cbg"><button class="primary" id="cbAdd">Add picked pages</button><button id="cbAll">Pick all</button></div>
+    <div id="cbGrid"></div>
+  </div>
+</div>
 
 <script>
 const $=s=>document.querySelector(s);
@@ -301,8 +342,17 @@ function tx(store,m,fn){return new Promise((res,rej)=>{const t=db.transaction(st
 const getPage=id=>tx('pages','readonly',s=>s.get(id));
 const putPage=p=>tx('pages','readwrite',s=>s.put(p));
 const delPageDB=id=>tx('pages','readwrite',s=>s.delete(id));
-const saveMeta=()=>tx('meta','readwrite',s=>s.put(proj,'project'));
-const loadMeta=()=>tx('meta','readonly',s=>s.get('project'));
+let LIB={books:[],current:null};
+const getBook=id=>tx('meta','readonly',s=>s.get('book:'+id));
+const putBook=(id,P)=>tx('meta','readwrite',s=>s.put(P,'book:'+id));
+const saveLib=()=>tx('meta','readwrite',s=>s.put(LIB,'library'));
+async function saveMeta(){if(!LIB.current)return;const b=LIB.books.find(b=>b.id===LIB.current);if(b)b.title=proj.title||'';await tx('meta','readwrite',s=>{s.put(proj,'book:'+LIB.current);s.put(LIB,'library')})}
+async function loadLibrary(){
+  LIB=await tx('meta','readonly',s=>s.get('library'));
+  if(!LIB){const old=await tx('meta','readonly',s=>s.get('project')),id=uid(),P=old||{order:[],title:'',lang:'eng'};LIB={books:[{id,title:P.title||''}],current:id};
+    await tx('meta','readwrite',s=>{s.put(P,'book:'+id);s.put(LIB,'library')});
+    for(const pid of P.order){const p=await getPage(pid);if(p&&!p.book){p.book=id;await putPage(p)}}}
+  proj=Object.assign({order:[],title:'',lang:'eng'},await getBook(LIB.current))}
 
 /* helpers */
 let stT;
@@ -324,7 +374,7 @@ async function fileToPage(f){
   const c=document.createElement('canvas');c.width=w;c.height=h;c.getContext('2d').drawImage(img,0,0,w,h);
   URL.revokeObjectURL(url);
   return {id:uid(),name:f.name,lm:f.lastModified,img:await toBlob(c,'image/jpeg',.9),thumb:await makeThumb(c,w,h),w,h,
-    corners:[[0,0],[w,0],[w,h],[0,h]],clean:'scan',text:'',figures:[],proc:null,ocr:false};
+    corners:[[0,0],[w,0],[w,h],[0,h]],clean:'scan',text:'',figures:[],proc:null,ocr:false,book:LIB.current};
 }
 async function addFiles(files){
   files=[...files].sort((a,b)=>a.name.localeCompare(b.name,undefined,{numeric:true}));
@@ -518,7 +568,6 @@ async function sortBy(key){const ps=[];for(const id of proj.order)ps.push(await 
   proj.order=ps.map(p=>p.id);cur=0;await saveMeta();await render();status('Pages sorted')}
 $('#sortName').onclick=()=>guard(()=>sortBy('name'));
 $('#sortTime').onclick=()=>guard(()=>sortBy('time'));
-$('#clearAll').onclick=()=>guard(async()=>{if(!confirm('Wipe every page and start over?'))return;await tx('pages','readwrite',s=>s.clear());proj={order:[],title:'',lang:proj.lang};$('#titleIn').value='';await saveMeta();cur=0;procId=null;closeMenu();await render()});
 document.querySelectorAll('[data-clean]').forEach(b=>b.onclick=()=>guard(async()=>{if(!page)return;page.clean=b.dataset.clean;invalidate(page);await putPage(page);if(mode==='corners')mode='result';await render()}));
 $('#cleanAll').onclick=()=>guard(async()=>{if(!page)return;const k=page.clean;for(const id of proj.order){const p=await getPage(id);if(p.clean!==k){p.clean=k;p.proc=null;await putPage(p)}}procId=null;await render();status('Look applied to every page')});
 async function rotate(dir){
@@ -529,7 +578,7 @@ async function rotate(dir){
 }
 $('#rotL').onclick=()=>guard(()=>rotate(-1));$('#rotR').onclick=()=>guard(()=>rotate(1));
 $('#resetCorners').onclick=()=>guard(async()=>{if(!page)return;page.corners=[[0,0],[page.w,0],[page.w,page.h],[0,page.h]];invalidate(page);await putPage(page);mode='corners';await render()});
-$('#delPage').onclick=()=>guard(async()=>{if(!page||!confirm('Delete this page?'))return;await delPageDB(page.id);proj.order.splice(cur,1);await saveMeta();procId=null;closeMenu();await render()});
+$('#delPage').onclick=()=>guard(async()=>{if(!page||!confirm('Delete this page?'))return;await dropPage(page.id);proj.order.splice(cur,1);await saveMeta();procId=null;closeMenu();await render()});
 
 /* pages grid */
 let thumbURLs=[];
@@ -545,7 +594,7 @@ async function openPages(){
     t.querySelector('img').onclick=()=>{cur=i;closePages()};
     t.querySelector('[data-a=l]').onclick=()=>guard(async()=>{if(i>0){[proj.order[i-1],proj.order[i]]=[proj.order[i],proj.order[i-1]];await saveMeta();await openPages()}});
     t.querySelector('[data-a=r]').onclick=()=>guard(async()=>{if(i<proj.order.length-1){[proj.order[i+1],proj.order[i]]=[proj.order[i],proj.order[i+1]];await saveMeta();await openPages()}});
-    t.querySelector('[data-a=d]').onclick=()=>guard(async()=>{if(!confirm('Delete page '+(i+1)+'?'))return;await delPageDB(proj.order[i]);proj.order.splice(i,1);await saveMeta();procId=null;await openPages()});
+    t.querySelector('[data-a=d]').onclick=()=>guard(async()=>{if(!confirm('Delete page '+(i+1)+'?'))return;await dropPage(proj.order[i]);proj.order.splice(i,1);await saveMeta();procId=null;await openPages()});
     g.append(t);
   }
   $('#pages').classList.add('open');
@@ -851,17 +900,28 @@ function seedRand(str){let h=2166136261;for(const c of str)h=Math.imul(h^c.charC
 const letters=k=>{let s='';k++;while(k>0){k--;s=String.fromCharCode(97+k%26)+s;k=Math.floor(k/26)}return s};
 
 /* the book's page order: original pages with added pages slotted in after them */
-function bkSeq(){
-  const ins=proj.inserts||{},seq=[];
-  (ins._start||[]).forEach((id,k)=>seq.push({id,label:letters(k).toUpperCase(),added:true,after:'_start'}));
-  proj.order.forEach((id,i)=>{seq.push({id,label:String(i+1),added:false});(ins[id]||[]).forEach((aid,k)=>seq.push({id:aid,label:(i+1)+letters(k),added:true,after:id}))});
-  BK.seq=seq;return seq}
+const bookTag=t=>((t||'Book').split(/\s+/).filter(Boolean).map(w=>w[0]).join('').slice(0,3)||'B').toUpperCase();
+async function seqFor(P,bookId){
+  const ins=P.inserts||{},seq=[],metas={};
+  for(const b of LIB.books)if(b.id!==bookId)metas[b.id]=await getBook(b.id);
+  (ins._start||[]).forEach((id,k)=>seq.push({id,label:letters(k).toUpperCase(),added:true,after:'_start',head:P.title}));
+  let own=0;
+  for(const id of P.order){const p=await getPage(id);let label,head=P.title;
+    if(p&&p.book&&p.book!==bookId&&metas[p.book]){const B=metas[p.book],n=B.order.indexOf(id);label=bookTag(B.title)+' '+(n>=0?n+1:'');head=B.title||'Book'}
+    else{own++;label=String(own)}
+    seq.push({id,label,added:false,head});(ins[id]||[]).forEach((aid,k)=>seq.push({id:aid,label:label+letters(k),added:true,after:id,head}))}
+  return seq}
+async function bkSeq(){BK.seq=await seqFor(proj,LIB.current);return BK.seq}
 async function bkSave(p){if(page&&page.id===p.id)['opens','bookmark','note','text','photos'].forEach(k=>{if(k in p)page[k]=p[k]});await putPage(p)}
 function spreadOf(i){return Math.floor((i+1)/2)}
 function bkVisible(){return BK.spread?[2*spreadOf(BK.i)-1,2*spreadOf(BK.i)]:[Math.max(0,BK.i)]}
 function bkPrimary(){const v=bkVisible().filter(x=>x>=0&&x<BK.seq.length);return v.length?v[v.length-1]:-1}
 function bkLayout(){
   const st=$('#bkStage'),w=st.clientWidth,h=st.clientHeight,A=.77;BK.spread=w>h*1.1;
+  if(BK.cmp){const sp=$('#bkSpread');sp.classList.remove('two');BK.cmp.vert=!BK.spread;
+    if(BK.spread){BK.ph=Math.floor(Math.min(h-26,(w-40)/(2*A)));BK.pw=Math.floor(BK.ph*A);sp.style.width=(BK.pw*2+14)+'px';sp.style.height=BK.ph+'px'}
+    else{BK.ph=Math.floor(Math.min((h-34)/2,(w-26)/A));BK.pw=Math.floor(BK.ph*A);sp.style.width=BK.pw+'px';sp.style.height=(BK.ph*2+8)+'px'}
+    sp.style.left=Math.round((w-sp.offsetWidth)/2)+'px';sp.style.top=Math.round((h-sp.offsetHeight)/2)+'px';if(BK.i<0)BK.i=0;if(BK.cmp.i<0)BK.cmp.i=0;return}
   const ph=BK.spread?Math.min(h-26,(w-26)/(2*A)):Math.min(h-26,(w-26)/A);BK.ph=Math.floor(ph);BK.pw=Math.floor(ph*A);
   const sp=$('#bkSpread'),W=BK.pw*(BK.spread?2:1);sp.style.width=W+'px';sp.style.height=BK.ph+'px';sp.style.left=Math.round((w-W)/2)+'px';sp.style.top=Math.round((h-BK.ph)/2)+'px';
   sp.classList.toggle('two',BK.spread);if(!BK.spread&&BK.i<0)BK.i=0}
@@ -909,15 +969,16 @@ async function pageHTML(p,si){
     const cells=[];for(let k=0;k<n;k++)cells.push(`<img class="ph" data-si="${si}" data-k="${k}" src="${await blobURL(p.id+':ph'+k,p.photos[k].img)}">`);
     photos=`<div class="pgrid" style="grid-template-columns:repeat(${cols},1fr);grid-template-rows:repeat(${rows},1fr);height:${body?'78%':'90%'}">${cells.join('')}</div>`}
   const all=top+body+photos+bot;return all||'<p class="emptyp">Nothing on this page yet.</p>'}
-async function bkPage(si,side){
-  const el=document.createElement('div');el.className='bpage '+side;el.style.width=BK.pw+'px';el.style.height=BK.ph+'px';
+async function bkPage(si,side,ctx){
+  const SQ=(ctx&&ctx.seq)||BK.seq,TT=ctx?ctx.title:proj.title;
+  const el=document.createElement('div');if(ctx&&ctx.pane)el.dataset.pane=ctx.pane;el.className='bpage '+side;el.style.width=BK.pw+'px';el.style.height=BK.ph+'px';
   const fs=BK.pw*.034;el.style.fontSize=fs+'px';
-  if(si<0){el.classList.add('cover');el.innerHTML=`<div><div class="ctitle">${esc(proj.title||'Manual')}</div><div class="csub">Rebuilt manual</div></div>`;return el}
-  if(si>=BK.seq.length){el.classList.add('endpaper');return el}
-  const e=BK.seq[si],p=await getPage(e.id);if(!p){el.classList.add('endpaper');return el}
+  if(si<0){el.classList.add('cover');el.innerHTML=`<div><div class="ctitle">${esc(TT||'Manual')}</div><div class="csub">Rebuilt manual</div></div>`;return el}
+  if(si>=SQ.length){el.classList.add('endpaper');return el}
+  const e=SQ[si],p=await getPage(e.id);if(!p){el.classList.add('endpaper');return el}
   const pc=document.createElement('div');pc.className='pc';
   if(BK.photo&&p.kind!=='insert'){const pr=await ensureProc(p);pc.innerHTML=`<img class="photo" src="${await blobURL(p.id+':proc:'+p.proc.size,p.proc)}">`;pc.style.left=pc.style.right=pc.style.top=pc.style.bottom='3%'}
-  else pc.innerHTML=`<div class="rh">${esc(proj.title||'Manual')}</div>`+await pageHTML(p,si);
+  else pc.innerHTML=`<div class="rh">${esc(e.head||TT||'Manual')}</div>`+await pageHTML(p,si);
   el.append(pc);
   const no=document.createElement('div');no.className='pno';no.textContent=e.label;el.append(no);
   if(e.added){const a=document.createElement('div');a.className='added';a.textContent='ADDED';el.append(a)}
@@ -927,14 +988,20 @@ async function bkPage(si,side){
   if(!BK.photo||p.kind==='insert'){const m=$('#bkMeasure');m.append(el);let f=fs;pc.style.fontSize=f+'px';
     let guard=0;while(pc.scrollHeight>pc.clientHeight+1&&guard++<14){f*=.92;pc.style.fontSize=f+'px'}el.remove()}
   return el}
+function cmpPlace(el,pane){if(pane==='a'){el.style.left='0';el.style.top='0'}else if(BK.cmp.vert){el.style.left='0';el.style.top=(BK.ph+8)+'px'}else{el.style.left=(BK.pw+14)+'px';el.style.top='0'}}
 async function bkShow(){
+  if(BK.cmp){const sp=$('#bkSpread'),[a,b]=await Promise.all([bkPage(BK.i,'l'),bkPage(BK.cmp.i,'r',BK.cmp)]);cmpPlace(a,'a');cmpPlace(b,'b');sp.innerHTML='';sp.append(a,b);BK.els=[a,b];bkSeen([BK.i]);return}
   const sp=$('#bkSpread'),idx=bkVisible(),els=await Promise.all(idx.map((x,k)=>bkPage(x,BK.spread?(k?'r':'l'):'r')));
   sp.innerHTML='';els.forEach((e,k)=>{e.style.left=(k*BK.pw)+'px';sp.append(e)});BK.els=els;bkSeen(idx);proj.bookAt=BK.i;saveMeta()}
 function bkSeen(idx){idx.forEach(async si=>{if(si<0||si>=BK.seq.length)return;const id=BK.seq[si].id;if(BK.seen.has(id))return;BK.seen.add(id);const p=await getPage(id);if(!p)return;p.opens=(p.opens||0)+1;await bkSave(p)})}
 
 /* page turning */
+async function cmpTurn(pane,dir){
+  if(BK.busy)return;const C=BK.cmp,isA=pane==='a',SQ=isA?BK.seq:C.seq,ni=(isA?BK.i:C.i)+dir;if(ni<0||ni>=SQ.length)return;BK.busy=true;
+  try{const old=BK.els[isA?0:1],np=await bkPage(ni,isA?'l':'r',isA?null:C);cmpPlace(np,pane);np.style.opacity='0';np.style.transform=`translateX(${dir*30}px)`;np.style.transition='opacity .25s,transform .25s';
+    $('#bkSpread').append(np);void np.offsetWidth;np.style.opacity='1';np.style.transform='none';await waitT(np,260);old.remove();BK.els[isA?0:1]=np;if(isA){BK.i=ni;bkSeen([ni])}else C.i=ni}finally{BK.busy=false}}
 async function bkTurn(dir){
-  if(BK.busy)return;const n=BK.seq.length,sp=$('#bkSpread');
+  if(BK.busy)return;if(BK.cmp)return cmpTurn('a',dir);const n=BK.seq.length,sp=$('#bkSpread');
   if(BK.spread){const s=spreadOf(BK.i),ns=s+dir,maxS=Math.floor(n/2);if(ns<0||ns>maxS)return;BK.busy=true;
     try{const L=2*ns-1,R=2*ns,[nl,nr]=await Promise.all([bkPage(L,'l'),bkPage(R,'r')]),[ol,or]=BK.els;
       const leaf=document.createElement('div');leaf.className='leaf';leaf.style.width=BK.pw+'px';leaf.style.height=BK.ph+'px';
@@ -951,12 +1018,12 @@ async function bkTurn(dir){
       if(dir>0){fr.append(op);sp.insertBefore(np,sp.firstChild);sp.append(leaf);void leaf.offsetWidth;leaf.style.transform='rotateY(-170deg)';await waitT(leaf,620)}
       else{fr.append(np);leaf.style.transition='none';leaf.style.transform='rotateY(-170deg)';sp.append(leaf);void leaf.offsetWidth;leaf.style.transition='';leaf.style.transform='rotateY(0deg)';await waitT(leaf,620);sp.append(np)}
       leaf.remove();op.remove();BK.els=[np];BK.i=ni;bkSeen([ni]);proj.bookAt=BK.i;saveMeta()}finally{BK.busy=false}}}
-async function bkGo(si){BK.i=BK.spread?si:Math.max(0,si);bkUnzoom();await bkShow()}
+async function bkGo(si){BK.i=BK.spread&&!BK.cmp?si:Math.max(0,si);bkUnzoom();await bkShow()}
 
 /* open and close */
-async function openBook(){
+async function openBook(){BK.cmp=null;$('#bkBack').textContent='Back';
   if(!proj.order.length){status('Add the manual photos first');return}
-  closeMenu();closePagesQuiet();bkSeq();BK.wear=proj.wear||'natural';BK.glare=proj.glare!==false;BK.seen=new Set();
+  closeMenu();closePagesQuiet();await bkSeq();BK.wear=proj.wear||'natural';BK.glare=proj.glare!==false;BK.seen=new Set();
   $('#book').classList.add('open');bkLabels();bkLayout();
   const at=proj.bookAt??(BK.spread?-1:0);BK.i=Math.min(Math.max(BK.spread?-1:0,at),BK.seq.length-1);bkUnzoom();await bkShow();
   bkStatus('Swipe to turn pages. Pinch or double tap to zoom.')}
@@ -966,7 +1033,10 @@ function bkLabels(){$('#bkPhoto').classList.toggle('on',BK.photo);$('#bkWear').t
   $('#bkGlareBtn').classList.toggle('on',BK.glare);$('#bkGlare').style.display=BK.glare?'block':'none'}
 $('#bookBtn').onclick=()=>guard(openBook);
 $('#openBook').onclick=()=>guard(openBook);
-$('#bkBack').onclick=closeBook;
+$('#bkBack').onclick=async()=>{if(BK.cmp){BK.cmp=null;bkLayout();bkUnzoom();await bkShow();$('#bkBack').textContent='Back';bkStatus('Compare closed');return}closeBook()};
+async function startCompare(bookId){const P=await getBook(bookId);if(!P)return;const b=LIB.books.find(x=>x.id===bookId);
+  BK.cmp={bookId,title:P.title||(b&&b.title)||'Book',seq:await seqFor(P,bookId),i:0,pane:'b'};bkClosePanel();bkLayout();bkUnzoom();await bkShow();$('#bkBack').textContent='Close';
+  bkStatus('Swipe each page on its own to line them up')}
 $('#bkPhoto').onclick=async()=>{BK.photo=!BK.photo;bkLabels();await bkShow();bkStatus(BK.photo?'Showing the original page photos':'Showing the rebuilt pages')};
 $('#bkWear').onclick=async()=>{BK.wear={natural:'heavy',heavy:'off',off:'natural'}[BK.wear];proj.wear=BK.wear;saveMeta();bkLabels();await bkShow();
   bkStatus({natural:'Pages wear in the more you open them',heavy:'Every page shop worn',off:'Clean pages'}[BK.wear])};
@@ -988,14 +1058,15 @@ addEventListener('resize',()=>{if(!$('#book').classList.contains('open'))return;
   const up=e=>{if(!ptrs.has(e.pointerId))return;const[x,y]=rel(e);ptrs.delete(e.pointerId);
     if(g&&g.pinch){if(ptrs.size<2){g=null;if(BK.s<1.06)bkUnzoom()}return}
     if(!g)return;const G=g;g=null;const dx=x-G.x0,dy=y-G.y0;
-    if(BK.s<=1.02&&Math.abs(dx)>45&&Math.abs(dx)>Math.abs(dy)*1.2){bkTurn(dx<0?1:-1);return}
+    if(BK.s<=1.02&&Math.abs(dx)>45&&Math.abs(dx)>Math.abs(dy)*1.2){if(BK.cmp){const pane=BK.cmp.vert?(G.y0<st.clientHeight/2?'a':'b'):(G.x0<st.clientWidth/2?'a':'b');cmpTurn(pane,dx<0?1:-1)}else bkTurn(dx<0?1:-1);return}
     if(G.moved)return;const now=Date.now();
     if(now-lastTap<320){lastTap=0;if(BK.s>1.02)bkUnzoom();else{const px=(x-BK.tx)/BK.s,py=(y-BK.ty)/BK.s;BK.s=2.5;BK.tx=x-px*2.5;BK.ty=y-py*2.5;bkClamp();bkApply()}return}
-    lastTap=now;if(BK.s<=1.02){const fx=x/st.clientWidth;if(fx<.1)bkTurn(-1);else if(fx>.9)bkTurn(1)}};
+    lastTap=now;if(BK.s<=1.02&&!BK.cmp){const fx=x/st.clientWidth;if(fx<.1)bkTurn(-1);else if(fx>.9)bkTurn(1)}};
   st.addEventListener('pointerup',up);st.addEventListener('pointercancel',e=>{ptrs.delete(e.pointerId);g=null})}
 
 /* taps on things inside a page */
 $('#bkSpread').addEventListener('click',e=>{
+  const pg0=e.target.closest('.bpage');if(pg0&&pg0.dataset.pane==='b'){if(e.target.closest('.ph')){$('#lbImg').src=e.target.closest('.ph').src;$('#lightbox').classList.add('open')}else if(e.target.closest('.figimg,.plink,.sticky'))bkStatus('Switch to that book to open its figures and notes');return}
   const fig=e.target.closest('.figimg'),pl=e.target.closest('.plink'),stk=e.target.closest('.sticky'),ph=e.target.closest('.ph');
   if(fig){const si=+fig.dataset.si,fi=+fig.dataset.fi;bkOpenFigure(si,fi,null)}
   else if(pl){bkOpenFigure(+pl.dataset.si,+pl.dataset.fi,pl.dataset.pid)}
@@ -1011,13 +1082,15 @@ function bkClosePanel(){$('#bkPanel').classList.remove('open');$('#bkScrim').sty
 $('#bkScrim').onclick=bkClosePanel;
 const head=t=>`<div class="phead"><span>${t}</span><button class="pclose">Close</button></div>`;
 $('#bkCont').onclick=async()=>{
-  bkSeq();const si=bkPrimary(),cur0=si>=0?await getPage(BK.seq[si].id):null;const marks=[],heads=[];
+  await bkSeq();const si=bkPrimary(),cur0=si>=0?await getPage(BK.seq[si].id):null;const marks=[],heads=[];
   for(let k=0;k<BK.seq.length;k++){const p=await getPage(BK.seq[k].id);if(!p)continue;if(p.bookmark)marks.push(k);blocksOf(p.text).forEach(b=>{if(b.head)heads.push([k,b.text])})}
   const item=(k,t)=>`<button class="pitem" data-go="${k}">${esc(t)}<small>Page ${esc(BK.seq[k].label)}</small></button>`;
   bkOpenPanel(head('Contents')+(cur0?`<h3>This page, ${esc(BK.seq[si].label)}</h3><div class="g2"><button id="bmBtn">${cur0.bookmark?'Remove bookmark':'Bookmark it'}</button><button id="ntBtn">${cur0.note?'Edit note':'Write a note'}</button></div>`:'')+
     `<h3>Bookmarks</h3>${marks.length?marks.map(k=>item(k,'Bookmark')).join(''):'<div class="cap">None yet</div>'}`+
     `<h3>Sections</h3>${heads.length?heads.map(([k,t])=>item(k,t)).join(''):'<div class="cap">Headings show up here once the page text is read</div>'}`+
-    `<h3>Start</h3><button class="pitem" data-go="${BK.spread?-1:0}">Front of the book</button>`);
+    `<h3>Start</h3><button class="pitem" data-go="${BK.spread&&!BK.cmp?-1:0}">Front of the book</button>`+
+    (LIB.books.length>1?`<h3>Compare side by side</h3>`+LIB.books.filter(b=>b.id!==LIB.current).map(b=>`<button class="pitem" data-cmp="${b.id}">${esc(b.title||'Untitled book')}</button>`).join(''):''));
+  $('#bkPanel').querySelectorAll('[data-cmp]').forEach(b=>b.onclick=()=>startCompare(b.dataset.cmp));
   $('#bkPanel').querySelectorAll('[data-go]').forEach(b=>b.onclick=()=>{bkClosePanel();bkGo(+b.dataset.go)});
   if(cur0){$('#bmBtn').onclick=async()=>{cur0.bookmark=!cur0.bookmark;await bkSave(cur0);bkClosePanel();await bkShow();bkStatus(cur0.bookmark?'Bookmarked':'Bookmark removed')};$('#ntBtn').onclick=()=>bkNotePanel(si)}};
 async function bkNotePanel(si){const p=await getPage(BK.seq[si].id);
@@ -1025,7 +1098,7 @@ async function bkNotePanel(si){const p=await getPage(BK.seq[si].id);
   $('#ntSave').onclick=async()=>{p.note=$('#ntText').value.trim();await bkSave(p);bkClosePanel();await bkShow()};
   $('#ntDel').onclick=async()=>{p.note='';await bkSave(p);bkClosePanel();await bkShow()}}
 $('#bkFind').onclick=async()=>{
-  bkSeq();const texts=[];for(let k=0;k<BK.seq.length;k++){const p=await getPage(BK.seq[k].id);texts.push(((p&&p.text)||'')+' '+((p&&p.note)||'')+' '+((p&&p.figures)||[]).map(f=>(f.name||'')+' '+(f.parts||[]).map(x=>x.name).join(' ')).join(' '))}
+  await bkSeq();const texts=[];for(let k=0;k<BK.seq.length;k++){const p=await getPage(BK.seq[k].id);texts.push(((p&&p.text)||'')+' '+((p&&p.note)||'')+' '+((p&&p.figures)||[]).map(f=>(f.name||'')+' '+(f.parts||[]).map(x=>x.name).join(' ')).join(' '))}
   bkOpenPanel(head('Find')+`<input id="fq" type="search" placeholder="Search the whole manual"><div id="fres"></div>`);
   const run=()=>{const q=$('#fq').value.trim().toLowerCase(),box=$('#fres');box.innerHTML='';if(q.length<2)return;let hits=0;
     texts.forEach((t,k)=>{const i=t.toLowerCase().indexOf(q);if(i<0)return;hits++;const sn=t.slice(Math.max(0,i-40),i+q.length+60).replace(/\s+/g,' ');
@@ -1036,7 +1109,7 @@ $('#bkFind').onclick=async()=>{
 /* adding your own pages of photos */
 let addTarget=null;
 $('#bkAdd').onclick=async()=>{
-  bkSeq();const si=bkPrimary(),e=si>=0?BK.seq[si]:null,p=e?await getPage(e.id):null;
+  await bkSeq();const si=bkPrimary(),e=si>=0?BK.seq[si]:null,p=e?await getPage(e.id):null;
   bkOpenPanel(head('Add to the book')+
     `<h3>New pages</h3><button class="full primary" id="adAfter">Add photo pages after ${e?'page '+esc(e.label):'the front'}</button>`+
     `<div class="cap" style="margin-top:6px">Each new page holds up to four photos. Load as many as you want and the pages get made for you.</div>`+
@@ -1047,7 +1120,7 @@ $('#bkAdd').onclick=async()=>{
     $('#adText').onclick=()=>{bkOpenPanel(head('Text on page '+esc(e.label))+`<h3>Text</h3><textarea id="adT">${esc(p.text||'')}</textarea><div class="g2"><button class="primary" id="adTSave">Save</button><button class="pclose2">Cancel</button></div>`);
       $('#adTSave').onclick=async()=>{p.text=$('#adT').value;await bkSave(p);bkClosePanel();await bkShow()};document.querySelector('.pclose2').onclick=bkClosePanel};
     $('#adDel').onclick=async()=>{if(!confirm('Delete added page '+e.label+' and its photos?'))return;const arr=proj.inserts[e.after]||[];arr.splice(arr.indexOf(e.id),1);
-      await delPageDB(e.id);await saveMeta();bkSeq();bkClosePanel();BK.i=Math.min(BK.i,BK.seq.length-1);await bkShow();bkStatus('Page removed')}}};
+      await dropPage(e.id);await saveMeta();await bkSeq();bkClosePanel();BK.i=Math.min(BK.i,BK.seq.length-1);await bkShow();bkStatus('Page removed')}}};
 async function photoRec(f){const url=URL.createObjectURL(f);const img=await new Promise((res,rej)=>{const i=new Image();i.onload=()=>res(i);i.onerror=()=>rej(new Error('Could not open '+f.name));i.src=url});
   const s=Math.min(1,1600/Math.max(img.naturalWidth,img.naturalHeight)),w=Math.round(img.naturalWidth*s),h=Math.round(img.naturalHeight*s),c=document.createElement('canvas');c.width=w;c.height=h;c.getContext('2d').drawImage(img,0,0,w,h);URL.revokeObjectURL(url);
   return{img:await toBlob(c,'image/jpeg',.88),w,h,name:f.name,lm:f.lastModified}}
@@ -1059,11 +1132,78 @@ $('#bkFile').onchange=e=>{const files=[...(e.target.files||[])];if(!files.length
     let room=Math.max(0,4-p.photos.length);p.photos.push(...recs.splice(0,room));await bkSave(p);firstId=p.id;addTarget={mode:'after',afterKey:BK.seq.find(x=>x.id===p.id).after,afterId:p.id}}
   if(recs.length){const arr=proj.inserts[addTarget.afterKey]=proj.inserts[addTarget.afterKey]||[];let pos=addTarget.afterId&&arr.includes(addTarget.afterId)?arr.indexOf(addTarget.afterId)+1:0;
     for(let k=0;k<recs.length;k+=4){const p={id:uid(),kind:'insert',photos:recs.slice(k,k+4),text:'',figures:[],opens:0};await putPage(p);arr.splice(pos++,0,p.id);if(!firstId)firstId=p.id}}
-  await saveMeta();bkSeq();const at=BK.seq.findIndex(x=>x.id===firstId);if(at>=0){BK.i=BK.spread?at:at}await bkGo(BK.i);bkStatus('Photos added to the book')})};
+  await saveMeta();await bkSeq();const at=BK.seq.findIndex(x=>x.id===firstId);if(at>=0){BK.i=BK.spread?at:at}await bkGo(BK.i);bkStatus('Photos added to the book')})};
+
+/* ================= LIBRARY ================= */
+async function usedElsewhere(pid,skipBook){for(const b of LIB.books){if(b.id===skipBook)continue;const P=await getBook(b.id);if(!P)continue;
+  if(P.order.includes(pid))return true;for(const k in (P.inserts||{}))if(P.inserts[k].includes(pid))return true}return false}
+async function dropPage(pid){if(!(await usedElsewhere(pid,LIB.current)))await delPageDB(pid)}
+async function fillLib(){const box=$('#libList');box.innerHTML='';
+  for(const b of LIB.books){const P=await getBook(b.id),n=P?P.order.length:0,btn=document.createElement('button');if(b.id===LIB.current)btn.className='cur';
+    btn.innerHTML=`${esc(b.title||'Untitled book')}<small>${n} page${n===1?'':'s'}${b.id===LIB.current?', open now':''}</small>`;
+    btn.onclick=()=>guard(()=>switchBook(b.id));box.append(btn)}}
+async function switchBook(id){if(id===LIB.current){closeMenu();return}if(LIB.current)await saveMeta();LIB.current=id;proj=Object.assign({order:[],title:'',lang:'eng'},await getBook(id));
+  await saveLib();cur=0;mode='result';procId=null;procCanvas=null;$('#titleIn').value=proj.title||'';$('#lang').value=proj.lang||'eng';closeMenu();await render();status('Opened '+(proj.title||'the book'))}
+async function newBook(P){const id=uid();P=Object.assign({order:[],title:'',lang:proj.lang||'eng'},P||{});await putBook(id,P);LIB.books.push({id,title:P.title||''});await saveLib();await switchBook(id);return id}
+$('#libNew').onclick=()=>guard(async()=>{await newBook();status('New book started. Add its photos.')});
+$('#libDel').onclick=()=>guard(async()=>{
+  if(!confirm('Delete '+(proj.title||'this book')+'? Pages that another book also uses stay in that book.'))return;
+  const gone=LIB.current,ids=[...proj.order];for(const k in (proj.inserts||{}))ids.push(...proj.inserts[k]);
+  for(const pid of ids)if(!(await usedElsewhere(pid,gone)))await delPageDB(pid);
+  await tx('meta','readwrite',s=>s.delete('book:'+gone));LIB.books=LIB.books.filter(b=>b.id!==gone);
+  if(!LIB.books.length){const id=uid();await putBook(id,{order:[],title:'',lang:'eng'});LIB.books.push({id,title:''})}
+  LIB.current=null;await switchBook(LIB.books[0].id);status('Book deleted')});
+const _openMenu=openMenu;openMenu=function(){_openMenu();fillLib()};
+$('#ham').onclick=openMenu;
+
+/* combine */
+async function openCombine(){closeMenu();await saveMeta();const opts=LIB.books.map(b=>`<option value="${b.id}">${esc(b.title||'Untitled book')}</option>`).join('');
+  $('#cbA').innerHTML=opts;$('#cbB').innerHTML=opts;$('#cbA').value=LIB.current;const other=LIB.books.find(b=>b.id!==LIB.current);if(other)$('#cbB').value=other.id;
+  const others=LIB.books.filter(b=>b.id!==LIB.current);$('#cbSrc').innerHTML=others.length?others.map(b=>`<option value="${b.id}">${esc(b.title||'Untitled book')}</option>`).join(''):'<option value="">No other books yet</option>';
+  $('#combine').classList.add('open');await cbGrid()}
+let cbPick=new Set(),cbURLs=[];
+async function cbGrid(){const g=$('#cbGrid');g.innerHTML='';cbURLs.forEach(u=>URL.revokeObjectURL(u));cbURLs=[];cbPick=new Set();const id=$('#cbSrc').value;if(!id)return;
+  const P=await getBook(id);for(let i=0;i<P.order.length;i++){const p=await getPage(P.order[i]);if(!p)continue;const u=URL.createObjectURL(p.thumb);cbURLs.push(u);
+    const t=document.createElement('div');t.className='ct';t.innerHTML=`<img src="${u}">Page ${i+1}`;t.onclick=()=>{if(cbPick.has(p.id))cbPick.delete(p.id);else cbPick.add(p.id);t.classList.toggle('on',cbPick.has(p.id))};t.dataset.id=p.id;g.append(t)}}
+$('#cbSrc').onchange=()=>cbGrid();
+$('#cbAll').onclick=()=>{$('#cbGrid').querySelectorAll('.ct').forEach(t=>{cbPick.add(t.dataset.id);t.classList.add('on')})};
+$('#cbBack').onclick=()=>{$('#combine').classList.remove('open');cbURLs.forEach(u=>URL.revokeObjectURL(u));cbURLs=[];guard(render)};
+$('#libCombine').onclick=()=>guard(openCombine);
+$('#cbAdd').onclick=()=>guard(async()=>{const id=$('#cbSrc').value;if(!id||!cbPick.size){status('Tap the pages to pull in first');return}
+  const P=await getBook(id),picked=P.order.filter(x=>cbPick.has(x));proj.inserts=proj.inserts||{};
+  picked.forEach(pid=>{if(!proj.order.includes(pid)){proj.order.push(pid);if(P.inserts&&P.inserts[pid])proj.inserts[pid]=[...P.inserts[pid]]}});
+  await saveMeta();$('#combine').classList.remove('open');cur=Math.max(0,proj.order.length-picked.length);await render();status(picked.length+' pages pulled in. Use Pages to move them where they belong.')});
+async function combineNew(alt){const a=$('#cbA').value,b=$('#cbB').value;if(a===b){alert('Pick two different books');return}
+  const A=await getBook(a),B=await getBook(b),order=[],ins={};
+  const take=(P,pid)=>{if(order.includes(pid))return;order.push(pid);if(P.inserts&&P.inserts[pid])ins[pid]=[...P.inserts[pid]]};
+  if(alt){for(let i=0;i<Math.max(A.order.length,B.order.length);i++){if(A.order[i])take(A,A.order[i]);if(B.order[i])take(B,B.order[i])}}
+  else{A.order.forEach(pid=>take(A,pid));B.order.forEach(pid=>take(B,pid))}
+  $('#combine').classList.remove('open');
+  await newBook({order,inserts:ins,title:(A.title||'Book')+' with '+(B.title||'Book'),lang:A.lang||'eng'});status('Combined book made. Rename it under This book.')}
+$('#cbAlt').onclick=()=>guard(()=>combineNew(true));
+$('#cbSeq').onclick=()=>guard(()=>combineNew(false));
+
+/* book files: save a whole book with its photos, load it on any phone */
+const b64=blob=>new Promise(r=>{if(!blob)return r(null);const fr=new FileReader();fr.onload=()=>r(fr.result);fr.readAsDataURL(blob)});
+const unb64=async d=>d?await (await fetch(d)).blob():null;
+$('#libSave').onclick=()=>guard(async()=>{closeMenu();await saveMeta();const ids=[...proj.order];for(const k in (proj.inserts||{}))ids.push(...proj.inserts[k]);const pages=[];
+  for(let i=0;i<ids.length;i++){status('Packing page '+(i+1)+' of '+ids.length,true);const p=await getPage(ids[i]);if(!p)continue;const q=Object.assign({},p);
+    q.img=await b64(p.img);q.thumb=await b64(p.thumb);q.proc=await b64(p.proc);if(p.photos)q.photos=await Promise.all(p.photos.map(async x=>Object.assign({},x,{img:await b64(x.img)})));pages.push(q)}
+  const blob=new Blob([JSON.stringify({format:'manualrebuild-book',version:1,book:proj,pages})],{type:'application/json'});
+  const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=fileBase()+'-book.json';a.click();setTimeout(()=>URL.revokeObjectURL(a.href),5000);status('Book file saved')});
+$('#libLoad').onclick=()=>{closeMenu();$('#libFile').value='';$('#libFile').click()};
+$('#libFile').onchange=e=>{const f=e.target.files&&e.target.files[0];if(!f)return;guard(async()=>{status('Reading book file',true);
+  const d=JSON.parse(await f.text());if(d.format!=='manualrebuild-book')throw new Error('That is not a book file from this app');
+  const bookId=uid(),map={},P=d.book;d.pages.forEach(p=>map[p.id]=uid());
+  for(let i=0;i<d.pages.length;i++){status('Unpacking page '+(i+1)+' of '+d.pages.length,true);const q=d.pages[i];
+    const p=Object.assign({},q,{id:map[q.id],book:q.book?bookId:undefined,img:await unb64(q.img),thumb:await unb64(q.thumb),proc:await unb64(q.proc)});
+    if(q.photos)p.photos=await Promise.all(q.photos.map(async x=>Object.assign({},x,{img:await unb64(x.img)})));if(p.figures)p.figures.forEach(fg=>{if(fg.id)fg.id=uid()});await putPage(p)}
+  P.order=P.order.map(x=>map[x]).filter(Boolean);const ins={};for(const k in (P.inserts||{}))ins[k==='_start'?k:map[k]]=P.inserts[k].map(x=>map[x]).filter(Boolean);P.inserts=ins;delete P.bookAt;
+  await putBook(bookId,P);LIB.books.push({id:bookId,title:P.title||''});await saveLib();LIB.current=null;await switchBook(bookId);status('Book loaded')})};
 
 /* boot */
 window.addEventListener('resize',()=>{if(!page)return;if(mode==='corners'&&srcImg)drawCorners();else if(procCanvas)drawResult()});
-(async()=>{db=await openDB();const m=await loadMeta();if(m)proj=Object.assign(proj,m);$('#titleIn').value=proj.title||'';$('#lang').value=proj.lang||'eng';
+(async()=>{db=await openDB();await loadLibrary();$('#titleIn').value=proj.title||'';$('#lang').value=proj.lang||'eng';
   if(navigator.storage&&navigator.storage.persist)navigator.storage.persist();await render()})();
 </script>
 </body>
